@@ -1,0 +1,9 @@
+[package]
+name = "tinap"
+version = "0.1.0"
+authors = ["Tarek Ziade <tarek@ziade.org>"]
+edition = "2018"
+
+[dependencies]
+async-std = "0.99"
+async-macros = "1"
