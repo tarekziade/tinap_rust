@@ -1,4 +1,7 @@
 mod throttled_copy;
+extern crate graceful;
+
+use std::sync::atomic::{ATOMIC_BOOL_INIT, AtomicBool, Ordering};
 
 use async_macros::join;
 use async_std::io;
@@ -8,6 +11,7 @@ use async_std::task;
 use std::sync::Arc;
 
 use structopt::StructOpt;
+use graceful::SignalGuard;
 
 use throttled_copy::copy;
 
@@ -40,6 +44,10 @@ struct Opt {
     verbose: u8,
 }
 
+
+static STOP: AtomicBool = ATOMIC_BOOL_INIT;
+
+
 async fn process(stream: TcpStream, opt: Opt) -> io::Result<u64> {
     println!("Accepted from: {}", stream.peer_addr()?);
     let (reader, writer) = &mut (&stream, &stream);
@@ -55,11 +63,21 @@ async fn process(stream: TcpStream, opt: Opt) -> io::Result<u64> {
 }
 
 fn main() -> io::Result<()> {
+    let signal_guard = SignalGuard::new();
     let opt = Arc::new(Opt::from_args());
 
+    signal_guard.at_exit(move |sig| {
+        println!("Signal {} received.", sig);
+        STOP.store(true, Ordering::Release);
+        // XXX here we want to:
+        // 1/ stop listening to incoming connections
+        // 2/ gracefully stop any running copy()
+        // 3/ end the task
+    });
+
     task::block_on(async move {
-        // how to reach opt here ?
         let listener = TcpListener::bind((opt.host.as_str(), opt.port)).await?;
+
         if opt.verbose > 0 {
             println!("Listening on {}", listener.local_addr()?);
         }
