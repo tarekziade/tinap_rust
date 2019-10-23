@@ -1,17 +1,18 @@
 mod throttled_copy;
 extern crate graceful;
 
-use std::sync::atomic::{ATOMIC_BOOL_INIT, AtomicBool, Ordering};
-
 use async_macros::join;
+use async_std::future::select;
 use async_std::io;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::prelude::*;
 use async_std::task;
+use futures::{channel::mpsc, Future, Sink, Stream};
 use std::sync::Arc;
+use std::thread;
 
-use structopt::StructOpt;
 use graceful::SignalGuard;
+use structopt::StructOpt;
 
 use throttled_copy::copy;
 
@@ -44,11 +45,7 @@ struct Opt {
     verbose: u8,
 }
 
-
-static STOP: AtomicBool = ATOMIC_BOOL_INIT;
-
-
-async fn process(stream: TcpStream, opt: Opt) -> io::Result<u64> {
+async fn process(stream: TcpStream, opt: &Opt) -> io::Result<u64> {
     println!("Accepted from: {}", stream.peer_addr()?);
     let (reader, writer) = &mut (&stream, &stream);
     let upstream = TcpStream::connect((opt.forward_host.as_str(), opt.forward_port)).await?;
@@ -63,35 +60,50 @@ async fn process(stream: TcpStream, opt: Opt) -> io::Result<u64> {
 }
 
 fn main() -> io::Result<()> {
-    let signal_guard = SignalGuard::new();
+    let (tx, mut rx) = mpsc::channel(10);
     let opt = Arc::new(Opt::from_args());
 
-    signal_guard.at_exit(move |sig| {
-        println!("Signal {} received.", sig);
-        STOP.store(true, Ordering::Release);
-        // XXX here we want to:
-        // 1/ stop listening to incoming connections
-        // 2/ gracefully stop any running copy()
-        // 3/ end the task
+    let handler = thread::spawn(move || {
+        task::block_on(async move {
+            let listener = TcpListener::bind((opt.host.as_str(), opt.port)).await?;
+            if opt.verbose > 0 {
+                println!("Listening on {}", listener.local_addr()?);
+            }
+            let mut incoming = listener.incoming();
+
+            loop {
+                let opt = Arc::clone(&opt);
+
+                let next = incoming.next();
+                let stop = rx.next();
+                let res = select!(next, stop).await;
+                match res {
+                    None => {}
+                    Some(stream_res) => match stream_res {
+                        Err(e) => {
+                            println!("Bye!");
+                            break;
+                        }
+                        Ok(stream) => {
+                            task::spawn(async move {
+                                let opt: &Opt = &opt;
+                                process(stream, opt).await;
+                            });
+                        }
+                    },
+                }
+            }
+            Ok::<(), io::Error>(())
+        });
     });
 
-    task::block_on(async move {
-        let listener = TcpListener::bind((opt.host.as_str(), opt.port)).await?;
+    let signal_guard = SignalGuard::new();
+    let mut signal_tx = tx.clone();
+    signal_guard.at_exit(move |sig| {
+        println!("Signal {} received.", sig);
+        signal_tx.try_send(Err(io::Error::new(io::ErrorKind::Other, "end!")));
+        handler.join().unwrap();
+    });
 
-        if opt.verbose > 0 {
-            println!("Listening on {}", listener.local_addr()?);
-        }
-
-        let mut incoming = listener.incoming();
-
-        while let Some(stream) = incoming.next().await {
-            let stream = stream?;
-            let opt = Arc::clone(&opt);
-            task::spawn(async move {
-                process(stream, Arc::try_unwrap(opt).unwrap()).await;
-            });
-        }
-
-        Ok(())
-    })
+    Ok(())
 }

@@ -7,7 +7,7 @@ edition = "2018"
 [dependencies]
 async-std = "0.99"
 async-macros = "1"
-futures = "0.1"
+futures-preview = "=0.3.0-alpha.19"
 futures-core-preview = "=0.3.0-alpha.19"
 futures-io-preview = "=0.3.0-alpha.19"
 futures-timer = "1.0.2"
