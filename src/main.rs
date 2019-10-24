@@ -82,6 +82,8 @@ fn main() -> io::Result<()> {
                     Some(stream_res) => match stream_res {
                         Err(e) => {
                             println!("Bye!");
+                            // here, we need to wait for any ongoing process
+                            // and eventually kill them after n seconds.
                             break;
                         }
                         Ok(stream) => {
