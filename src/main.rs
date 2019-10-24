@@ -7,8 +7,7 @@ use async_std::io;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::prelude::*;
 use async_std::task;
-use futures::{channel::mpsc, Future, Sink, Stream};
-use std::sync::Arc;
+use futures::channel::mpsc;
 use std::thread;
 
 use graceful::SignalGuard;
@@ -18,6 +17,7 @@ use throttled_copy::copy;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "Tinap port forwarder")]
+#[derive(Clone)]
 struct Opt {
     #[structopt(short, long)]
     debug: bool,
@@ -61,7 +61,7 @@ async fn process(stream: TcpStream, opt: &Opt) -> io::Result<u64> {
 
 fn main() -> io::Result<()> {
     let (tx, mut rx) = mpsc::channel(10);
-    let opt = Arc::new(Opt::from_args());
+    let opt = Opt::from_args();
 
     let handler = thread::spawn(move || {
         task::block_on(async move {
@@ -72,38 +72,36 @@ fn main() -> io::Result<()> {
             let mut incoming = listener.incoming();
 
             loop {
-                let opt = Arc::clone(&opt);
-
+                let opt = opt.clone();
                 let next = incoming.next();
                 let stop = rx.next();
                 let res = select!(next, stop).await;
                 match res {
                     None => {}
                     Some(stream_res) => match stream_res {
-                        Err(e) => {
-                            println!("Bye!");
-                            // here, we need to wait for any ongoing process
+                        Err(_) => {
+                            println!("\nBye!");
+                            // XXX here, we need to wait for any ongoing process
                             // and eventually kill them after n seconds.
                             break;
                         }
                         Ok(stream) => {
                             task::spawn(async move {
-                                let opt: &Opt = &opt;
-                                process(stream, opt).await;
+                                process(stream, &opt).await.unwrap();
                             });
                         }
                     },
                 }
             }
             Ok::<(), io::Error>(())
-        });
+        }).unwrap();
     });
 
     let signal_guard = SignalGuard::new();
     let mut signal_tx = tx.clone();
     signal_guard.at_exit(move |sig| {
         println!("Signal {} received.", sig);
-        signal_tx.try_send(Err(io::Error::new(io::ErrorKind::Other, "end!")));
+        signal_tx.try_send(Err(io::Error::new(io::ErrorKind::Other, "end!"))).unwrap();
         handler.join().unwrap();
     });
 

@@ -87,17 +87,10 @@ where
                 let over_bandwidth = f64::value_from(data.len()).unwrap() - (elapsed * opt_maxbps);
                 if over_bandwidth > 0. {
                     let extra_delay = over_bandwidth / opt_maxbps;
-                    current_delay = current_delay + extra_delay as u64;
+                    current_delay += extra_delay as u64;
                     *last_tick = precise_time_s()
                 }
 
-                //
-                /* XXX this blocks. I don't know why yet
-                let mut sdelay = Delay::new(Duration::from_millis(DELAY));
-                let pdelay = Pin::new(&mut sdelay);
-                futures_core::ready!(pdelay.poll(cx));
-                */
-                // this works
                 let mut sdelay =
                     delay.get_or_insert_with(|| Delay::new(Duration::from_millis(current_delay)));
                 let pdelay = Pin::new(&mut sdelay);
@@ -121,8 +114,8 @@ where
         amt: 0,
         delay: None,
         last_tick: precise_time_s(),
-        opt_delay: opt_delay,
-        opt_maxbps: opt_maxbps,
+        opt_delay,
+        opt_maxbps
     };
     future.await
 }
